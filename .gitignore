@@ -1,0 +1,37 @@
+# dependencies
+node_modules
+
+# secrets: never commit these (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# build output
+dist
+.next
+out
+build
+*.tsbuildinfo
+next-env.d.ts
+
+# local tooling and logs
+.vercel
+.turbo
+.cache
+coverage
+*.log
+npm-debug.log*
+
+# editor / OS files
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# local database or uploads, if you ever use them
+*.sqlite
+*.db
+uploads
+
+# NOTE: do NOT ignore packages/db/prisma/migrations (Render needs it)
+# and do NOT ignore apps/web/public/seed (the starter photos).

@@ -1,0 +1,17 @@
+{
+  "name": "@so/db",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "argon2": "^0.41.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "tsx": "^4.19.0"
+  }
+}

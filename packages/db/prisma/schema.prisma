@@ -1,0 +1,858 @@
+// Seven Oaks Nursery: Prisma schema (PostgreSQL)
+// Translatable fields are Json shaped { "en": string, "ar": string } (see I18n in packages/shared).
+// Soft delete: deletedAt, filtered by a Prisma extension. Sensitive fields (*Enc) are AES-256-GCM
+// encrypted at the application layer before write.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")   // Neon pooled connection
+  directUrl = env("DIRECT_URL")     // Neon direct connection (migrations)
+}
+
+// ───────────── Enums ─────────────
+enum PublishStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+enum EnquiryType {
+  GENERAL
+  ADMISSION
+  CONTACT
+  NEWSLETTER
+}
+enum PipelineStatus {
+  NEW
+  CONTACTED
+  TOUR
+  OFFERED
+  ENROLLED
+  DECLINED
+}
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  OFFERED
+  ENROLLED
+  DECLINED
+  WITHDRAWN
+}
+enum ConsentType {
+  PHOTO_PUBLIC
+  PHOTO_INTERNAL
+  DATA_PROCESSING
+  MARKETING
+  MEDICAL
+  TERMS
+  COOKIES
+}
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  PARTIAL
+  OVERDUE
+  CANCELLED
+}
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+enum MediaKind {
+  IMAGE
+  VIDEO
+  DOCUMENT
+  FONT
+}
+enum Visibility {
+  PUBLIC
+  PARENTS
+  STAFF
+}
+enum MenuLocation {
+  HEADER
+  FOOTER
+  QUICK_LINKS
+}
+
+// ───────────── Auth, RBAC, security ─────────────
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  passwordHash   String
+  name           String
+  phone          String?
+  avatarUrl      String?
+  locale         String    @default("en")
+  totpSecretEnc  String?
+  totpEnabled    Boolean   @default(false)
+  totpLastStep   Int?
+  recoveryCodes  Json?
+  failedLogins   Int       @default(0)
+  lockedUntil    DateTime?
+  isActive       Boolean   @default(true)
+  guardianId     String?   @unique
+  guardian       Guardian? @relation(fields: [guardianId], references: [id])
+  roles          UserRole[]
+  sessions       Session[]
+  logins         LoginHistory[]
+  auditLogs      AuditLog[]
+  assignedEnq    Enquiry[] @relation("EnquiryAssignee")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique // SUPER_ADMIN, ADMIN, EDITOR, ADMISSIONS, TEACHER, PARENT
+  name        Json
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id       String @id @default(cuid())
+  resource String // e.g. "page", "enquiry", "media"
+  action   String // read | create | update | delete | publish | export
+  roles    RolePermission[]
+  @@unique([resource, action])
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  @@id([roleId, permissionId])
+}
+
+model Session {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash   String   @unique
+  ip            String?
+  userAgent     String?
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime @default(now())
+  @@index([userId])
+}
+
+model LoginHistory {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  email     String
+  success   Boolean
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  action     String   // create | update | delete | publish | login | export ...
+  entity     String
+  entityId   String?
+  diff       Json?    // { before, after } with PII redacted
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  @@index([entity, entityId])
+  @@index([actorId, createdAt])
+}
+
+// ───────────── Page builder ─────────────
+model Page {
+  id          String        @id @default(cuid())
+  key         String        @unique // home, about-us, inclusion ...
+  title       Json          // I18n (admin label + <title> fallback)
+  status      PublishStatus @default(DRAFT)
+  publishAt   DateTime?
+  isSystem    Boolean       @default(false)
+  sections    Section[]
+  versions    PageVersion[]
+  menuItems   MenuItem[]
+  seo         SeoMeta?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deletedAt   DateTime?
+}
+
+model Section {
+  id        String   @id @default(cuid())
+  pageId    String
+  page      Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  type      String   // hero | features | class-cards | learning-areas | gallery-preview | cta ...
+  config    Json     // typed per section type; text fields are I18n
+  sortOrder Int
+  isVisible Boolean  @default(true)
+  blocks    SectionBlock[]
+  @@index([pageId, sortOrder])
+}
+
+model SectionBlock {
+  id        String  @id @default(cuid())
+  sectionId String
+  section   Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  type      String  // feature | card | button | stat | quote ...
+  content   Json
+  mediaId   String?
+  media     Media?  @relation(fields: [mediaId], references: [id])
+  sortOrder Int
+  isVisible Boolean @default(true)
+  @@index([sectionId, sortOrder])
+}
+
+model PageVersion {
+  id        String   @id @default(cuid())
+  pageId    String
+  page      Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  version   Int
+  snapshot  Json     // full sections + blocks + seo at publish time
+  note      String?
+  createdBy String?
+  createdAt DateTime @default(now())
+  @@unique([pageId, version])
+}
+
+// ───────────── Menus ─────────────
+model Menu {
+  id       String       @id @default(cuid())
+  location MenuLocation @unique
+  items    MenuItem[]
+}
+
+model MenuItem {
+  id        String    @id @default(cuid())
+  menuId    String
+  menu      Menu      @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  parentId  String?
+  parent    MenuItem? @relation("MenuTree", fields: [parentId], references: [id])
+  children  MenuItem[] @relation("MenuTree")
+  label     Json
+  pageId    String?
+  page      Page?     @relation(fields: [pageId], references: [id])
+  externalUrl String?
+  isButton  Boolean   @default(false) // BOOK A TOUR
+  isVisible Boolean   @default(true)
+  sortOrder Int
+  @@index([menuId, sortOrder])
+}
+
+// ───────────── Media & gallery ─────────────
+model Media {
+  id         String    @id @default(cuid())
+  kind       MediaKind
+  folder     String    @default("/")
+  storageKey String    @unique
+  bucketPrivate Boolean @default(false)
+  mime       String
+  sizeBytes  Int
+  width      Int?
+  height     Int?
+  variants   Json?     // { webp: {...}, avif: {...}, thumb: {...} }
+  altText    Json?     // I18n
+  caption    Json?
+  // consent: required before PUBLIC use when the image shows a child
+  showsChild Boolean   @default(false)
+  consents   Consent[]
+  albums     AlbumMedia[]
+  blocks     SectionBlock[]
+  classGallery ClassGalleryItem[]
+  createdAt  DateTime  @default(now())
+  deletedAt  DateTime?
+  @@index([folder])
+}
+
+model Album {
+  id        String        @id @default(cuid())
+  title     Json
+  category  String        // learning | playing | creating | exploring | celebrating
+  status    PublishStatus @default(DRAFT)
+  sortOrder Int           @default(0)
+  items     AlbumMedia[]
+  createdAt DateTime      @default(now())
+  deletedAt DateTime?
+}
+
+model AlbumMedia {
+  albumId   String
+  mediaId   String
+  sortOrder Int    @default(0)
+  album     Album  @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  media     Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  @@id([albumId, mediaId])
+}
+
+// ───────────── Content modules ─────────────
+model SchoolClass {
+  id          String        @id @default(cuid())
+  slug        Json          // I18n
+  name        Json
+  ageFromMonths Int
+  ageToMonths   Int
+  description Json
+  ratio       Json?
+  schedule    Json?
+  capacity    Int?
+  coverMediaId String?
+  status      PublishStatus @default(DRAFT)
+  sortOrder   Int           @default(0)
+  gallery     ClassGalleryItem[]
+  applications Application[]
+  announcements Announcement[]
+  seo         SeoMeta?
+  deletedAt   DateTime?
+}
+
+model ClassGalleryItem {
+  classId   String
+  mediaId   String
+  sortOrder Int         @default(0)
+  class     SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+  media     Media       @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  @@id([classId, mediaId])
+}
+
+model StaffMember {
+  id          String        @id @default(cuid())
+  name        Json
+  role        Json
+  bio         Json?
+  photoId     String?
+  consentId   String?       // photo + bio publishing consent
+  status      PublishStatus @default(DRAFT)
+  sortOrder   Int           @default(0)
+  deletedAt   DateTime?
+}
+
+model Testimonial {
+  id         String        @id @default(cuid())
+  authorName String        // parent name
+  childName  String?
+  body       Json          // I18n quote
+  rating     Int?
+  imageUrl   String?
+  source     String?       // site | google | admin
+  status     PublishStatus @default(DRAFT) // DRAFT = pending approval, PUBLISHED = approved, ARCHIVED = hidden
+  featured   Boolean       @default(false)
+  places     Json?         // ["home","about","testimonials"]
+  sortOrder  Int           @default(0)
+  approvedBy String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  deletedAt  DateTime?
+  @@index([status, sortOrder])
+}
+
+model Faq {
+  id        String        @id @default(cuid())
+  category  String?
+  question  Json
+  answer    Json
+  status    PublishStatus @default(DRAFT)
+  sortOrder Int           @default(0)
+  deletedAt DateTime?
+}
+
+model Event {
+  id          String        @id @default(cuid())
+  title       Json
+  description Json?
+  startsAt    DateTime
+  endsAt      DateTime?
+  allDay      Boolean       @default(false)
+  location    Json?
+  kind        String?       // holiday | activity | deadline
+  status      PublishStatus @default(DRAFT)
+  publishAt   DateTime?
+  seo         SeoMeta?
+  deletedAt   DateTime?
+  @@index([startsAt])
+}
+
+model NewsCategory {
+  id    String     @id @default(cuid())
+  name  Json
+  slug  Json
+  posts NewsPost[]
+}
+
+model NewsPost {
+  id          String        @id @default(cuid())
+  categoryId  String?
+  category    NewsCategory? @relation(fields: [categoryId], references: [id])
+  title       Json
+  excerpt     Json?
+  body        Json
+  coverMediaId String?
+  status      PublishStatus @default(DRAFT)
+  publishAt   DateTime?
+  seo         SeoMeta?
+  createdAt   DateTime      @default(now())
+  deletedAt   DateTime?
+}
+
+model Document {
+  id         String     @id @default(cuid())
+  title      Json
+  category   String     // form | handbook | policy | calendar
+  mediaId    String
+  visibility Visibility @default(PUBLIC)
+  status     PublishStatus @default(DRAFT)
+  sortOrder  Int        @default(0)
+  deletedAt  DateTime?
+}
+
+// ───────────── Admissions ─────────────
+model Enquiry {
+  id          String         @id @default(cuid())
+  type        EnquiryType
+  name        String
+  email       String
+  phone       String?
+  message     String?
+  childAgeMonths Int?
+  childName   String?
+  childAge    String?
+  interest    String?
+  preferredContact String?
+  visitDate   String?
+  followUpAt  DateTime?
+  consentAt   DateTime?
+  consentText String?
+  page        String?
+  referrer    String?
+  locale      String         @default("en")
+  status      PipelineStatus @default(NEW)
+  assigneeId  String?
+  assignee    User?          @relation("EnquiryAssignee", fields: [assigneeId], references: [id])
+  notes       Json?
+  source      String?
+  tour        TourBooking?
+  createdAt   DateTime       @default(now())
+  deletedAt   DateTime?
+  @@index([status, createdAt])
+}
+
+model TourSlot {
+  id        String   @id @default(cuid())
+  startsAt  DateTime
+  endsAt    DateTime
+  capacity  Int      @default(1)
+  isOpen    Boolean  @default(true)
+  bookings  TourBooking[]
+  @@index([startsAt])
+}
+
+model TourBooking {
+  id        String   @id @default(cuid())
+  slotId    String
+  slot      TourSlot @relation(fields: [slotId], references: [id])
+  enquiryId String   @unique
+  enquiry   Enquiry  @relation(fields: [enquiryId], references: [id])
+  attendees Int      @default(1)
+  createdAt DateTime @default(now())
+}
+
+model Application {
+  id          String            @id @default(cuid())
+  reference   String            @unique
+  status      ApplicationStatus @default(DRAFT)
+  resumeTokenHash String?       @unique // save-and-resume link
+  classId     String?
+  class       SchoolClass?      @relation(fields: [classId], references: [id])
+  childId     String            @unique
+  child       Child             @relation(fields: [childId], references: [id])
+  step        Int               @default(1)
+  formData    Json?             // non-sensitive answers
+  documents   ApplicationDocument[]
+  submittedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  deletedAt   DateTime?
+}
+
+model ApplicationDocument {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  type          String      // birth-cert | passport | emirates-id | vaccination | medical
+  storageKey    String      // PRIVATE bucket, signed URL access only
+  mime          String
+  sizeBytes     Int
+  scanStatus    String      @default("PENDING")
+  createdAt     DateTime    @default(now())
+}
+
+model Child {
+  id            String        @id @default(cuid())
+  firstName     String
+  lastName      String
+  dobEnc        String        // encrypted
+  gender        String?
+  nationality   String?
+  idNumberEnc   String?
+  medicalEnc    String?       // allergies, conditions, SEN notes
+  application   Application?
+  guardians     ChildGuardian[]
+  consents      Consent[]
+  invoices      Invoice[]
+  deletedAt     DateTime?
+}
+
+model Guardian {
+  id          String   @id @default(cuid())
+  fullName    String
+  relation    String?
+  email       String
+  phoneEnc    String
+  idNumberEnc String?
+  user        User?
+  children    ChildGuardian[]
+  consents    Consent[]
+  deletedAt   DateTime?
+}
+
+model ChildGuardian {
+  childId     String
+  guardianId  String
+  isPrimary   Boolean  @default(false)
+  canCollect  Boolean  @default(true)
+  child       Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  guardian    Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+  @@id([childId, guardianId])
+}
+
+model Consent {
+  id         String      @id @default(cuid())
+  type       ConsentType
+  granted    Boolean
+  childId    String?
+  child      Child?      @relation(fields: [childId], references: [id])
+  guardianId String?
+  guardian   Guardian?   @relation(fields: [guardianId], references: [id])
+  mediaId    String?
+  media      Media?      @relation(fields: [mediaId], references: [id])
+  textVersion String     // version of the consent wording shown
+  givenAt    DateTime    @default(now())
+  withdrawnAt DateTime?
+  ip         String?
+  @@index([type, granted])
+}
+
+// ───────────── Communication & payments ─────────────
+model Announcement {
+  id        String        @id @default(cuid())
+  title     Json
+  body      Json
+  classId   String?       // null = all parents
+  class     SchoolClass?  @relation(fields: [classId], references: [id])
+  status    PublishStatus @default(DRAFT)
+  sendEmail Boolean       @default(false)
+  publishAt DateTime?
+  createdAt DateTime      @default(now())
+  deletedAt DateTime?
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  subject    String?
+  body       String
+  readAt     DateTime?
+  createdAt  DateTime @default(now())
+  @@index([toUserId, readAt])
+}
+
+model Invoice {
+  id        String        @id @default(cuid())
+  number    String        @unique
+  childId   String
+  child     Child         @relation(fields: [childId], references: [id])
+  amountAed Decimal       @db.Decimal(10, 2)
+  vatAed    Decimal       @default(0) @db.Decimal(10, 2)
+  status    InvoiceStatus @default(DRAFT)
+  dueDate   DateTime?
+  lines     Json
+  payments  Payment[]
+  createdAt DateTime      @default(now())
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice       @relation(fields: [invoiceId], references: [id])
+  gateway     String
+  gatewayRef  String?       @unique
+  amountAed   Decimal       @db.Decimal(10, 2)
+  status      PaymentStatus @default(PENDING)
+  receiptNo   String?       @unique
+  paidAt      DateTime?
+  createdAt   DateTime      @default(now())
+}
+
+// ───────────── Theme, settings, SEO ─────────────
+model ThemeSetting {
+  id        String   @id @default(cuid())
+  isActive  Boolean  @default(false)
+  draft     Boolean  @default(true)
+  tokens    Json     // colours, fonts(heading/body/arabic), sizes H1-H6, radius, shadow, spacing, container
+  logoId    String?
+  faviconId String?
+  updatedAt DateTime @updatedAt
+}
+
+model SiteSetting {
+  key       String   @id // nursery.name, contact.phone, hours, map.lat, social.*, maintenance, cookie.text ...
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model FeatureFlag {
+  key     String  @id // portal, payments, darkMode, newsletter
+  enabled Boolean @default(false)
+}
+
+model SeoMeta {
+  id          String   @id @default(cuid())
+  slug        Json     // I18n, locale-aware
+  metaTitle   Json?
+  metaDescription Json?
+  keywords    Json?
+  canonical   String?
+  ogImageId   String?
+  ogImageUrl  String?  // social-share image URL (from the media library)
+  noindex     Boolean  @default(false)
+  jsonLd      Json?    // I18n or shared schema override
+  pageId      String?  @unique
+  page        Page?    @relation(fields: [pageId], references: [id])
+  classId     String?  @unique
+  class       SchoolClass? @relation(fields: [classId], references: [id])
+  eventId     String?  @unique
+  event       Event?   @relation(fields: [eventId], references: [id])
+  newsPostId  String?  @unique
+  newsPost    NewsPost? @relation(fields: [newsPostId], references: [id])
+}
+
+model Redirect {
+  id        String   @id @default(cuid())
+  fromPath  String   @unique
+  toPath    String
+  statusCode Int     @default(301)
+  isActive  Boolean  @default(true)
+  hits      Int      @default(0)
+}
+
+/// First-party, cookieless, anonymous page-view log used by Admin → Analytics. No IP address or personal data is stored.
+model PageView {
+  id          String   @id            // random id created by the visitor's browser (lets us add the time-on-page later)
+  createdAt   DateTime @default(now())
+  sid         String                  // anonymous per-tab session id, never linked to a person
+  path        String
+  locale      String
+  source      String                  // direct | search | social | referral
+  referrer    String?                 // referring host only
+  device      String                  // desktop | mobile | tablet
+  country     String?                 // 2-letter code when the hosting provider supplies it
+  durationSec Int      @default(0)
+  vid         String?                 // known-visitor id: only set when the visitor accepted analytics cookies
+  ip          String?                 // only set for visitors who accepted analytics cookies, in the form chosen in Settings → Analytics
+  @@index([vid])
+  @@index([createdAt])
+  @@index([sid])
+  @@index([path])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  type      String   // enquiry | lead | upload | translation | content | login | security | system
+  severity  String   @default("info") // info | success | warning | error
+  title     String
+  body      String?
+  link      String?
+  readBy    String[] @default([])
+  hiddenBy  String[] @default([])
+  dedupeKey String?  @unique
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+model TranslateUsage {
+  id        String   @id @default(cuid())
+  userId    String?
+  chars     Int
+  texts     Int
+  ok        Boolean  @default(true)
+  error     String?
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+model VerificationCode {
+  id        String    @id @default(cuid())
+  userId    String
+  purpose   String    // email-old | email-new | password
+  codeHash  String
+  payload   Json?     // e.g. { newEmail }
+  attempts  Int       @default(0)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  @@index([userId, purpose])
+}
+
+model EmailTemplate {
+  key       String   @id // welcome | enquiry-admin | enquiry-reply | admissions | password-reset | verification | newsletter
+  subject   Json     // I18n
+  heading   Json     // I18n
+  body      Json     // I18n, supports {{variables}} and blank-line paragraphs
+  buttonLabel Json?  // I18n
+  enabled   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model ConsentLog {
+  id        String   @id @default(cuid())
+  cid       String   // anonymous browser id
+  necessary Boolean  @default(true)
+  analytics Boolean  @default(false)
+  marketing Boolean  @default(false)
+  version   String
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+/// A returning browser that accepted analytics cookies. Holds the IP address, and the email once the person identified themselves (enquiry, tour request, newsletter).
+model Visitor {
+  id             String    @id            // random id kept in the visitor's browser (vid)
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  ip             String?
+  country        String?
+  device         String    @default("desktop")
+  browser        String?
+  locale         String    @default("en")
+  source         String?
+  visits         Int       @default(1)
+  pageViews      Int       @default(0)
+  lastPath       String?
+  email          String?
+  name           String?
+  identifiedAt   DateTime?
+  marketingOptIn Boolean   @default(false) // true only when the person ticked the agreement box on a form
+  @@index([email])
+  @@index([lastSeenAt])
+}
+
+/// People who clicked "unsubscribe" in a campaign email. They are never emailed again.
+model EmailOptOut {
+  email     String   @id
+  createdAt DateTime @default(now())
+  source    String?
+}
+
+/// A follow-up email sent to a group of people (for example "welcome to the Seven Oaks family").
+model Campaign {
+  id          String   @id @default(cuid())
+  name        String
+  status      String   @default("DRAFT") // DRAFT | SENDING | SENT | FAILED
+  audience    Json     // { kind: leads|newsletter|visitors|all|selected, status?, sinceDays?, pagePrefix?, emails? }
+  content     Json     // { subject, heading, body, buttonLabel, buttonUrl, celebrate }  (I18n texts)
+  total       Int      @default(0)
+  sent        Int      @default(0)
+  failed      Int      @default(0)
+  skipped     Int      @default(0)
+  createdById String?
+  createdByName String?
+  createdAt   DateTime @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  recipients  CampaignRecipient[]
+  @@index([createdAt])
+}
+
+model CampaignRecipient {
+  id         String    @id @default(cuid())
+  campaignId String
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  email      String
+  name       String?
+  locale     String    @default("en")
+  status     String    @default("PENDING") // PENDING | SENT | FAILED | SKIPPED
+  error      String?
+  sentAt     DateTime?
+  @@unique([campaignId, email])
+  @@index([campaignId, status])
+}
+
+/// Daily counters for paid or limited services, used by Admin → API usage and its 80/90/100% alerts.
+model ApiUsage {
+  id       String @id @default(cuid())
+  provider String // maps | email | translate
+  day      String // YYYY-MM-DD (UTC)
+  metric   String @default("calls")
+  count    Int    @default(0)
+  @@unique([provider, day, metric])
+}
+
+// ───────── Galleries, gallery categories and reusable detail pages (all managed in Admin) ─────────
+enum EntryKind {
+  CATEGORY // a gallery category, e.g. "Celebrations"
+  GALLERY  // a gallery: photos and videos with a description
+  DETAIL   // a reusable detail page: text, pictures, videos, documents and links
+}
+
+model Entry {
+  id        String        @id @default(cuid())
+  kind      EntryKind
+  slug      String
+  group     String        @default("") // GALLERY: the category's slug. DETAIL: an optional topic such as "parents"
+  title     Json          // I18n
+  summary   Json          // I18n, short description shown on cards
+  body      Json          // I18n, text with simple formatting
+  cover     Json?         // image (or video) object, same shape as page pictures
+  items     Json          // [{ media: image-or-video object, caption: I18n }]
+  docs      Json          // [{ label: I18n, url, note: I18n }]
+  links     Json          // [{ label: I18n, url }]
+  info      Json          // [{ label: I18n, value: I18n }] additional information rows
+  related   Json          // [slug, ...] chosen related entries (empty = same category)
+  path      String        @default("info") // DETAIL: the folder in the web address, e.g. "parents" -> /parents/<slug>. Chosen in the admin.
+  blocks    Json          @default("[]")   // DETAIL: designed content blocks (same blocks as pages): text, tables, photo cards, steps, FAQ...
+  design    Json          @default("{}")   // DETAIL: look of the top banner { style, showBack, parentLabel }
+  seo       Json          // { metaTitle: I18n, metaDescription: I18n, ogImageUrl, noindex }
+  isVisible Boolean       @default(true)
+  status    PublishStatus @default(DRAFT)
+  publishAt DateTime?
+  sortOrder Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  deletedAt DateTime?
+
+  @@unique([kind, slug])
+  @@index([kind, status, isVisible, sortOrder])
+  @@index([group])
+}

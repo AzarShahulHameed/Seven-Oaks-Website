@@ -1,0 +1,18 @@
+# Optional: a local PostgreSQL if you don't want to use Neon while developing.
+#   docker compose up -d
+# Then in .env set BOTH of these to the same value:
+#   DATABASE_URL="postgresql://postgres:postgres@localhost:5432/sevenoaks"
+#   DIRECT_URL="postgresql://postgres:postgres@localhost:5432/sevenoaks"
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sevenoaks
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - sevenoaks-db:/var/lib/postgresql/data
+volumes:
+  sevenoaks-db:

@@ -1,0 +1,35 @@
+{
+  "name": "sevenoaks",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c green,blue \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma",
+    "db:push": "prisma db push --schema packages/db/prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema packages/db/prisma/schema.prisma",
+    "db:deploy": "prisma migrate deploy --schema packages/db/prisma/schema.prisma",
+    "db:seed": "npm run seed -w packages/db --",
+    "db:update": "npm run seed -w packages/db -- --update",
+    "build:api": "npm run db:generate && npm run build -w apps/api",
+    "start:api": "npm run db:deploy && node apps/api/dist/main.js",
+    "postinstall": "prisma generate --schema packages/db/prisma/schema.prisma || echo Prisma generate skipped - run: npm run db:generate",
+    "doctor": "node scripts/doctor.mjs",
+    "db:studio": "prisma studio --schema packages/db/prisma/schema.prisma",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "db:reset-content": "npm run seed -w packages/db -- --reset-content --yes-overwrite"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "prisma": "^5.22.0",
+    "typescript": "^5.6.3"
+  }
+}
