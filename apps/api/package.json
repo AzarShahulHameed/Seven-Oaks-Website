@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register --test test/unit.test.ts"
+    "test": "TS_NODE_PROJECT=tsconfig.test.json TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register --test test/unit.test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",

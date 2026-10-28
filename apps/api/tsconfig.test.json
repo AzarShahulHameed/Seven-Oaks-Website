@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "module": "commonjs", "moduleResolution": "node", "rootDir": "..", "noEmit": true },
+  "include": ["src", "test", "../../packages/db/prisma"]
+}
