@@ -43,7 +43,7 @@ export async function adminFetch(path: string, init: RequestInit = {}): Promise<
       let ok = await refreshOnce();
       if (!ok) { res = await run(); ok = res.status !== 401; } // another tab may have refreshed a moment ago
       else res = await run();
-      if (!ok && res.status === 401 && typeof window !== 'undefined') {
+      if (!ok && res.status === 401 && typeof window !== 'undefined' && (window as any).__soSignedIn) {
         // Do not throw the page away: ask the person to sign in again in place so unsaved work survives.
         window.dispatchEvent(new CustomEvent('so-session-expired'));
         await new Promise<void>((resolve) => { const h = () => { window.removeEventListener('so-session-back', h); resolve(); }; window.addEventListener('so-session-back', h); });

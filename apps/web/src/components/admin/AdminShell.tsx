@@ -64,8 +64,8 @@ function Shell({ children }: { children: React.ReactNode }) {
   const brand = useBrand();
 
   const load = () => adminFetch('/auth/me').then(async (r) => {
-    if (r.ok) { setMe(await r.json()); setFail(''); }
-    else if (r.status === 401) router.replace('/admin/login');
+    if (r.ok) { (window as any).__soSignedIn = true; setMe(await r.json()); setFail(''); }
+    else if (r.status === 401) { (window as any).__soSignedIn = false; router.replace('/admin/login'); }
     else setFail(await describeError(r));
   });
   useEffect(() => { load(); const f = () => { load(); }; window.addEventListener('so-me-changed', f); return () => window.removeEventListener('so-me-changed', f); /* eslint-disable-next-line */ }, []);
